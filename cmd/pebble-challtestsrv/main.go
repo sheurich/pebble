@@ -128,6 +128,8 @@ func main() {
 		// instead of having separate endpoints per type.
 		http.HandleFunc("/set-txt", oobSrv.addDNS01)
 		http.HandleFunc("/clear-txt", oobSrv.delDNS01)
+		http.HandleFunc("/set-dns-persist-01", oobSrv.addDNS01)
+		http.HandleFunc("/clear-dns-persist-01", oobSrv.delDNS01)
 		http.HandleFunc("/add-a", oobSrv.addDNSARecord)
 		http.HandleFunc("/clear-a", oobSrv.delDNSARecord)
 		http.HandleFunc("/add-aaaa", oobSrv.addDNSAAAARecord)
