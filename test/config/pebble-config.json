@@ -13,7 +13,7 @@
         "authz": 3,
         "order": 5
     },
-    // "issuerDomainNames": ["pebble.localhost", "ca.example.com"],
+    "issuerDomainNames": ["pebble.localhost", "ca.example.com"],
     "profiles": {
       "default": {
         "description": "The profile you know and love",
