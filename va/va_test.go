@@ -204,6 +204,107 @@ func TestParseDNSPersist01Record(t *testing.T) {
 			expectError: true,
 			expected:    nil,
 		},
+		{
+			name:        "Non-normalized issuer - uppercase with trailing dot",
+			record:      "CA.EXAMPLE.COM.; accounturi=https://example.com/acct/1",
+			expectError: false,
+			expected: &DNSPersist01Record{
+				IssuerDomainName: "ca.example.com",
+				AccountURI:       "https://example.com/acct/1",
+				Policy:           "",
+				PersistUntil:     0,
+			},
+		},
+		{
+			name:        "Non-normalized issuer - uppercase without trailing dot",
+			record:      "CA.EXAMPLE.COM; accounturi=https://example.com/acct/1",
+			expectError: false,
+			expected: &DNSPersist01Record{
+				IssuerDomainName: "ca.example.com",
+				AccountURI:       "https://example.com/acct/1",
+				Policy:           "",
+				PersistUntil:     0,
+			},
+		},
+		{
+			name:        "Non-normalized issuer - lowercase with trailing dot",
+			record:      "ca.example.com.; accounturi=https://example.com/acct/1",
+			expectError: false,
+			expected: &DNSPersist01Record{
+				IssuerDomainName: "ca.example.com",
+				AccountURI:       "https://example.com/acct/1",
+				Policy:           "",
+				PersistUntil:     0,
+			},
+		},
+		{
+			name:        "Non-normalized issuer - mixed case with trailing dot and wildcard",
+			record:      "Pebble.LocalHost.; accounturi=https://localhost:14000/acct/1; policy=wildcard",
+			expectError: false,
+			expected: &DNSPersist01Record{
+				IssuerDomainName: "pebble.localhost",
+				AccountURI:       "https://localhost:14000/acct/1",
+				Policy:           "wildcard",
+				PersistUntil:     0,
+			},
+		},
+		{
+			name:        "Case-insensitive parameter keys - AccountURI",
+			record:      "ca.example.com; AccountURI=https://example.com/acct/1",
+			expectError: false,
+			expected: &DNSPersist01Record{
+				IssuerDomainName: "ca.example.com",
+				AccountURI:       "https://example.com/acct/1",
+				Policy:           "",
+				PersistUntil:     0,
+			},
+		},
+		{
+			name:        "Case-insensitive parameter keys - POLICY",
+			record:      "ca.example.com; accounturi=https://example.com/acct/1; POLICY=wildcard",
+			expectError: false,
+			expected: &DNSPersist01Record{
+				IssuerDomainName: "ca.example.com",
+				AccountURI:       "https://example.com/acct/1",
+				Policy:           "wildcard",
+				PersistUntil:     0,
+			},
+		},
+		{
+			name:        "Case-insensitive parameter keys - PersistUntil",
+			record:      "ca.example.com; accounturi=https://example.com/acct/1; PersistUntil=1735689600",
+			expectError: false,
+			expected: &DNSPersist01Record{
+				IssuerDomainName: "ca.example.com",
+				AccountURI:       "https://example.com/acct/1",
+				Policy:           "",
+				PersistUntil:     1735689600,
+			},
+		},
+		{
+			name:        "Duplicate accounturi parameter",
+			record:      "ca.example.com; accounturi=https://example.com/acct/1; accounturi=https://example.com/acct/2",
+			expectError: true,
+			expected:    nil,
+		},
+		{
+			name:        "Duplicate policy parameter",
+			record:      "ca.example.com; accounturi=https://example.com/acct/1; policy=wildcard; policy=other",
+			expectError: true,
+			expected:    nil,
+		},
+		{
+			name:        "Duplicate persistUntil parameter",
+			record:      "ca.example.com; accounturi=https://example.com/acct/1; persistUntil=1735689600; persistUntil=1735689601",
+			expectError: true,
+			expected:    nil,
+		},
+		{
+			name:        "Duplicate accounturi with different case",
+			record:      "ca.example.com; accounturi=https://example.com/acct/1; AccountURI=https://example.com/acct/2",
+			expectError: true,
+			expected:    nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -425,6 +526,30 @@ func TestValidateDNSPersist01(t *testing.T) {
 			task:          createTask(issuerDomainNames, accountURL, false),
 			expectError:   true,
 			errorContains: "No valid dns-persist-01 record found for this challenge",
+		},
+		{
+			name: "Non-normalized issuer - uppercase with trailing dot should match",
+			txtRecords: []string{
+				"PEBBLE.LOCALHOST.; accounturi=https://localhost:14000/acct/1",
+			},
+			task:        createTask(issuerDomainNames, accountURL, false),
+			expectError: false,
+		},
+		{
+			name: "Non-normalized issuer - mixed case should match",
+			txtRecords: []string{
+				"CA.Example.COM; accounturi=https://localhost:14000/acct/1",
+			},
+			task:        createTask(issuerDomainNames, accountURL, false),
+			expectError: false,
+		},
+		{
+			name: "Case-insensitive policy - uppercase WILDCARD",
+			txtRecords: []string{
+				"pebble.localhost; accounturi=https://localhost:14000/acct/1; policy=WILDCARD",
+			},
+			task:        createTask(issuerDomainNames, accountURL, true),
+			expectError: false,
 		},
 	}
 

@@ -433,10 +433,15 @@ func (va VAImpl) validateDNSPersist01(task *vaTask) *core.ValidationRecord {
 		return result
 	}
 
+	// Track parse errors vs validation errors for better error reporting
+	var parseErrors []error
+	var validationErrors []error
+
 	for _, txt := range txts {
 		record, err := va.parseDNSPersist01Record(txt)
 		if err != nil {
 			va.log.Printf("Failed to parse dns-persist-01 record %q: %s", txt, err)
+			parseErrors = append(parseErrors, err)
 			continue
 		}
 
@@ -450,11 +455,13 @@ func (va VAImpl) validateDNSPersist01(task *vaTask) *core.ValidationRecord {
 		}
 
 		if !issuerFound {
+			validationErrors = append(validationErrors, fmt.Errorf("issuer domain name mismatch"))
 			continue
 		}
 
 		// Validate accounturi matches the requesting account's URL
 		if record.AccountURI != task.AccountURL {
+			validationErrors = append(validationErrors, fmt.Errorf("account URI mismatch"))
 			continue
 		}
 
@@ -463,6 +470,7 @@ func (va VAImpl) validateDNSPersist01(task *vaTask) *core.ValidationRecord {
 			currentTime := time.Now().Unix()
 			if currentTime > record.PersistUntil {
 				va.log.Printf("dns-persist-01 record expired: current=%d, persistUntil=%d", currentTime, record.PersistUntil)
+				validationErrors = append(validationErrors, fmt.Errorf("record expired"))
 				continue
 			}
 		}
@@ -470,6 +478,7 @@ func (va VAImpl) validateDNSPersist01(task *vaTask) *core.ValidationRecord {
 		// Validate wildcard policy if this is a wildcard certificate request
 		if task.Wildcard && record.Policy != "wildcard" {
 			va.log.Printf("dns-persist-01 record missing required wildcard policy for wildcard certificate request")
+			validationErrors = append(validationErrors, fmt.Errorf("wildcard policy required but not present"))
 			continue
 		}
 
@@ -477,7 +486,12 @@ func (va VAImpl) validateDNSPersist01(task *vaTask) *core.ValidationRecord {
 		return result
 	}
 
-	result.Error = acme.UnauthorizedProblem("No valid dns-persist-01 record found for this challenge")
+	// Return appropriate error based on what went wrong
+	if len(parseErrors) > 0 && len(validationErrors) == 0 {
+		result.Error = acme.MalformedProblem("Invalid TXT record syntax")
+	} else {
+		result.Error = acme.UnauthorizedProblem("No valid dns-persist-01 record found for this challenge")
+	}
 	return result
 }
 
@@ -502,10 +516,15 @@ func (va VAImpl) parseDNSPersist01Record(record string) (*DNSPersist01Record, er
 	if issuerDomainName == "" {
 		return nil, fmt.Errorf("missing issuer-domain-name")
 	}
+	// Normalize: lowercase and remove trailing dot per spec Section 3.1
+	issuerDomainName = strings.ToLower(strings.TrimSuffix(issuerDomainName, "."))
 
 	result := &DNSPersist01Record{
 		IssuerDomainName: issuerDomainName,
 	}
+
+	// Track seen parameters to detect duplicates
+	seenParams := make(map[string]bool)
 
 	// Parse parameters from remaining parts
 	for _, part := range parts[1:] {
@@ -523,7 +542,14 @@ func (va VAImpl) parseDNSPersist01Record(record string) (*DNSPersist01Record, er
 		key := strings.TrimSpace(part[:eqIndex])
 		value := strings.TrimSpace(part[eqIndex+1:])
 
-		switch strings.ToLower(key) {
+		// Check for duplicate parameters
+		keyLower := strings.ToLower(key)
+		if seenParams[keyLower] {
+			return nil, fmt.Errorf("duplicate parameter: %s", key)
+		}
+		seenParams[keyLower] = true
+
+		switch keyLower {
 		case "accounturi":
 			if value == "" {
 				return nil, fmt.Errorf("accounturi parameter cannot be empty")
