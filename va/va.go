@@ -321,6 +321,8 @@ func (va VAImpl) performValidation(task *vaTask, results chan<- *core.Validation
 		results <- va.validateDNS01(task)
 	case acme.ChallengeDNSAccount01:
 		results <- va.validateDNSAccount01(task)
+	case acme.ChallengeDNSPersist01:
+		results <- va.validateDNSPersist01(task)
 	default:
 		va.log.Printf("Error: performValidation(): Invalid challenge type: %q", task.Challenge.Type)
 	}
@@ -401,6 +403,182 @@ func (va VAImpl) validateDNSAccount01(task *vaTask) *core.ValidationRecord {
 	msg := "Correct value not found for DNS-ACCOUNT-01 challenge"
 	result.Error = acme.UnauthorizedProblem(msg)
 	return result
+}
+
+func (va VAImpl) validateDNSPersist01(task *vaTask) *core.ValidationRecord {
+	challengeSubdomain := fmt.Sprintf("_validation-persist.%s", task.Identifier.Value)
+	result := &core.ValidationRecord{
+		URL:         challengeSubdomain,
+		ValidatedAt: time.Now(),
+	}
+
+	txts, err := va.getTXTEntry(challengeSubdomain)
+	if err != nil {
+		result.Error = acme.UnauthorizedProblem(fmt.Sprintf("Error retrieving TXT records for dns-persist-01 challenge (%q)", err))
+		return result
+	}
+
+	if len(txts) == 0 {
+		msg := "No TXT records found for dns-persist-01 challenge"
+		result.Error = acme.UnauthorizedProblem(msg)
+		return result
+	}
+
+	task.Challenge.RLock()
+	issuerDomainNames := task.Challenge.IssuerDomainNames
+	task.Challenge.RUnlock()
+
+	if len(issuerDomainNames) == 0 {
+		result.Error = acme.MalformedProblem("Challenge missing issuer-domain-names")
+		return result
+	}
+
+	// Track parse errors vs validation errors for better error reporting
+	var parseErrors []error
+	var validationErrors []error
+
+	for _, txt := range txts {
+		record, err := va.parseDNSPersist01Record(txt)
+		if err != nil {
+			va.log.Printf("Failed to parse dns-persist-01 record %q: %s", txt, err)
+			parseErrors = append(parseErrors, err)
+			continue
+		}
+
+		// Validate issuer-domain-name against challenge's allowed values
+		issuerFound := false
+		for _, validIssuer := range issuerDomainNames {
+			if record.IssuerDomainName == validIssuer {
+				issuerFound = true
+				break
+			}
+		}
+
+		if !issuerFound {
+			validationErrors = append(validationErrors, fmt.Errorf("issuer domain name mismatch"))
+			continue
+		}
+
+		// Validate accounturi matches the requesting account's URL
+		if record.AccountURI != task.AccountURL {
+			validationErrors = append(validationErrors, fmt.Errorf("account URI mismatch"))
+			continue
+		}
+
+		// Validate persistUntil if present
+		if record.PersistUntil > 0 {
+			currentTime := time.Now().Unix()
+			if currentTime > record.PersistUntil {
+				va.log.Printf("dns-persist-01 record expired: current=%d, persistUntil=%d", currentTime, record.PersistUntil)
+				validationErrors = append(validationErrors, fmt.Errorf("record expired"))
+				continue
+			}
+		}
+
+		// Validate wildcard policy if this is a wildcard certificate request
+		if task.Wildcard && record.Policy != "wildcard" {
+			va.log.Printf("dns-persist-01 record missing required wildcard policy for wildcard certificate request")
+			validationErrors = append(validationErrors, fmt.Errorf("wildcard policy required but not present"))
+			continue
+		}
+
+		// Record is valid
+		return result
+	}
+
+	// Return appropriate error based on what went wrong
+	if len(parseErrors) > 0 && len(validationErrors) == 0 {
+		result.Error = acme.MalformedProblem("Invalid TXT record syntax")
+	} else {
+		result.Error = acme.UnauthorizedProblem("No valid dns-persist-01 record found for this challenge")
+	}
+	return result
+}
+
+// DNSPersist01Record represents a parsed dns-persist-01 TXT record
+type DNSPersist01Record struct {
+	IssuerDomainName string
+	AccountURI       string
+	Policy           string
+	PersistUntil     int64
+}
+
+// parseDNSPersist01Record parses a DNS TXT record according to RFC 8659 issue-value syntax
+func (va VAImpl) parseDNSPersist01Record(record string) (*DNSPersist01Record, error) {
+	// Split by semicolon to get issuer-domain-name and parameters
+	parts := strings.Split(record, ";")
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("empty record")
+	}
+
+	// First part is the issuer-domain-name
+	issuerDomainName := strings.TrimSpace(parts[0])
+	if issuerDomainName == "" {
+		return nil, fmt.Errorf("missing issuer-domain-name")
+	}
+	// Normalize: lowercase and remove trailing dot per spec Section 3.1
+	issuerDomainName = strings.ToLower(strings.TrimSuffix(issuerDomainName, "."))
+
+	result := &DNSPersist01Record{
+		IssuerDomainName: issuerDomainName,
+	}
+
+	// Track seen parameters to detect duplicates
+	seenParams := make(map[string]bool)
+
+	// Parse parameters from remaining parts
+	for _, part := range parts[1:] {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Find the first equals sign to split key=value
+		eqIndex := strings.Index(part, "=")
+		if eqIndex == -1 {
+			return nil, fmt.Errorf("invalid parameter format: %q", part)
+		}
+
+		key := strings.TrimSpace(part[:eqIndex])
+		value := strings.TrimSpace(part[eqIndex+1:])
+
+		// Check for duplicate parameters
+		keyLower := strings.ToLower(key)
+		if seenParams[keyLower] {
+			return nil, fmt.Errorf("duplicate parameter: %s", key)
+		}
+		seenParams[keyLower] = true
+
+		switch keyLower {
+		case "accounturi":
+			if value == "" {
+				return nil, fmt.Errorf("accounturi parameter cannot be empty")
+			}
+			result.AccountURI = value
+		case "policy":
+			// Policy parameter is case-insensitive per spec
+			result.Policy = strings.ToLower(value)
+		case "persistuntil":
+			if value == "" {
+				return nil, fmt.Errorf("persistUntil parameter cannot be empty")
+			}
+			timestamp, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid persistUntil timestamp: %q", value)
+			}
+			result.PersistUntil = timestamp
+		default:
+			// Per spec, CAs MUST ignore unknown parameter keys
+			va.log.Printf("Ignoring unknown dns-persist-01 parameter: %q", key)
+		}
+	}
+
+	// Validate required parameters
+	if result.AccountURI == "" {
+		return nil, fmt.Errorf("missing required accounturi parameter")
+	}
+
+	return result, nil
 }
 
 func (va VAImpl) validateTLSALPN01(task *vaTask) *core.ValidationRecord {

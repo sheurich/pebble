@@ -174,6 +174,7 @@ type WebFrontEndImpl struct {
 	requireEAB        bool
 	retryAfterAuthz   int
 	retryAfterOrder   int
+	issuerDomainNames []string
 }
 
 const ToSURL = "data:text/plain,Do%20what%20thou%20wilt"
@@ -184,6 +185,7 @@ func New(
 	va *va.VAImpl,
 	ca *ca.CAImpl,
 	strict, requireEAB bool, retryAfterAuthz int, retryAfterOrder int,
+	issuerDomainNames []string,
 ) WebFrontEndImpl {
 	// Read the % of good nonces that should be rejected as bad nonces from the
 	// environment
@@ -243,6 +245,7 @@ func New(
 		requireEAB:        requireEAB,
 		retryAfterAuthz:   retryAfterAuthz,
 		retryAfterOrder:   retryAfterOrder,
+		issuerDomainNames: issuerDomainNames,
 	}
 }
 
@@ -1609,6 +1612,10 @@ func (wfe *WebFrontEndImpl) makeChallenge(
 		Authz: authz,
 	}
 
+	if chalType == acme.ChallengeDNSPersist01 {
+		chal.IssuerDomainNames = wfe.issuerDomainNames
+	}
+
 	// Add it to the in-memory database
 	_, err := wfe.db.AddChallenge(chal)
 	if err != nil {
@@ -1624,18 +1631,12 @@ func (wfe *WebFrontEndImpl) makeChallenges(authz *core.Authorization, request *h
 
 	// Determine which challenge types are enabled for this identifier
 	var enabledChallenges []string
-	if strings.HasPrefix(authz.Identifier.Value, "*.") {
-		// Authorizations for a wildcard identifier get DNS-based challenges to
-		// match Boulder/Let's Encrypt wildcard issuance policy
-		enabledChallenges = []string{acme.ChallengeDNS01, acme.ChallengeDNSAccount01}
-	} else {
+	if authz.Identifier.Type == acme.IdentifierIP {
 		// IP addresses get HTTP-01 and TLS-ALPN challenges
-		if authz.Identifier.Type == acme.IdentifierIP {
-			enabledChallenges = []string{acme.ChallengeHTTP01, acme.ChallengeTLSALPN01}
-		} else {
-			// Non-wildcard, non-IP identifier authorizations get all of the enabled challenge types
-			enabledChallenges = []string{acme.ChallengeHTTP01, acme.ChallengeTLSALPN01, acme.ChallengeDNS01, acme.ChallengeDNSAccount01}
-		}
+		enabledChallenges = []string{acme.ChallengeHTTP01, acme.ChallengeTLSALPN01}
+	} else {
+		// DNS identifiers get all of the enabled challenge types
+		enabledChallenges = []string{acme.ChallengeHTTP01, acme.ChallengeTLSALPN01, acme.ChallengeDNS01, acme.ChallengeDNSAccount01, acme.ChallengeDNSPersist01}
 	}
 	for _, chalType := range enabledChallenges {
 		chal, err := wfe.makeChallenge(chalType, authz, request)

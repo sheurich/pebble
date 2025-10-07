@@ -33,8 +33,10 @@ type config struct {
 		ExternalAccountMACKeys         map[string]string
 		// Configure policies to deny certain domains
 		DomainBlocklist []string
-		KeyAlgorithm    string
-		Profiles        map[string]ca.Profile
+		KeyAlgorithm      string
+		// Configure issuer domain names for dns-persist-01 challenges
+		IssuerDomainNames []string
+		Profiles          map[string]ca.Profile
 
 		RetryAfter struct {
 			Authz int
@@ -138,7 +140,13 @@ func main() {
 		cmd.FailOnError(err, "Failed to add domain to block list")
 	}
 
-	wfeImpl := wfe.New(logger, db, va, ca, *strictMode, c.Pebble.ExternalAccountBindingRequired, c.Pebble.RetryAfter.Authz, c.Pebble.RetryAfter.Order)
+	// Set default issuer domain names if none are configured
+	issuerDomainNames := c.Pebble.IssuerDomainNames
+	if len(issuerDomainNames) == 0 {
+		issuerDomainNames = []string{"pebble.localhost", "ca.example.com"}
+	}
+
+	wfeImpl := wfe.New(logger, db, va, ca, *strictMode, c.Pebble.ExternalAccountBindingRequired, c.Pebble.RetryAfter.Authz, c.Pebble.RetryAfter.Order, issuerDomainNames)
 	muxHandler := wfeImpl.Handler()
 
 	if c.Pebble.ManagementListenAddress != "" {

@@ -14,6 +14,7 @@
         "order": 5
     },
     "keyAlgorithm": "ecdsa",
+    "issuer-domain-names": ["pebble.localhost", "ca.example.com"],
     "profiles": {
       "default": {
         "description": "The profile you know and love",

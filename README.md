@@ -166,6 +166,27 @@ unprivileged high ports:
 These ports can be changed by editing the `"httpPort"` and `"tlsPort"` values of
 the Pebble `-config` file provided to `pebble`.
 
+### DNS-Persist-01 Challenge Support
+
+Pebble supports the `dns-persist-01` challenge type as specified in
+[draft-sheurich-acme-dns-persist](https://datatracker.ietf.org/doc/draft-sheurich-acme-dns-persist/).
+This challenge validates domain control using persistent DNS TXT records that
+can be reused across multiple certificate orders.
+
+The `dns-persist-01` challenge uses TXT records at `_validation-persist.{domain}`
+containing the CA's issuer domain name and account URI. By default, Pebble
+accepts the issuer domain names `pebble.localhost` and `ca.example.com`. You can
+configure custom issuer domain names by setting the `issuerDomainNames` field in
+your `pebble-config.json`.
+
+The `pebble-challtestsrv` management interface provides endpoints for testing:
+
+* **Set DNS-Persist-01 Record**: `POST /set-dns-persist-01`
+* **Clear DNS-Persist-01 Record**: `POST /clear-dns-persist-01`
+
+See the [pebble-challtestsrv README](./cmd/pebble-challtestsrv/README.md)
+for more information.
+
 ### Strict Mode
 
 Pebble's goal to aggressively support new protocol features and backwards
@@ -283,7 +304,7 @@ The percentage may be controlled with the environment variable `PEBBLE_AUTHZREUS
 
 #### Pending Authorization Reuse
 
-Pebble does not currently reuse Pending Authorizations across Orders, however other ACME servers - notably Boulder - will reuse Pending Authorizations. 
+Pebble does not currently reuse Pending Authorizations across Orders, however other ACME servers - notably Boulder - will reuse Pending Authorizations.
 
 
 ### Avoiding Client HTTPS Errors
